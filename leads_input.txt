@@ -1,0 +1,9 @@
+# One business website URL per line. Lines starting with # are ignored.
+#
+# LEAVE THIS FILE EMPTY (only comments) to use SEARCH MODE instead -
+# Agent 1 will search automatically using the queries in
+# agent1_find_leads.py's SEARCH_QUERIES list.
+#
+# Add real URLs below ONLY if you want to research specific businesses
+# you already have in mind instead of searching:
+# https://example-business.com
