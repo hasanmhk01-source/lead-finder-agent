@@ -1,178 +1,128 @@
-# Multi-Agent Business Development System — Agent 1 + Agent 2
+# AI Lead Finder: Multi-Agent Business Development System
 
-A two-agent system for finding and drafting outreach to real automation/
-chatbot leads. Every step that could damage a real relationship or
-reputation if wrong has a human approval gate right after it.
+**Live demo:** https://lead-finder-agent-rozm48rhb4bspf9n9gw95m.streamlit.app/
 
-## What it deliberately does NOT do
+A three-agent system that finds local businesses, researches whether they're a good fit for an AI chatbot or automation service, and drafts personalized outreach emails. Every step that could damage a real relationship or reputation has a human approval gate.
 
-- It does not scrape private or authenticated platforms (LinkedIn, etc.) —
-  search happens through the Tavily Search API, a legitimate, sanctioned
-  service built for exactly this kind of use case.
-- It does not send anything. Agent 2 drafts emails; it never sends one.
-  You read every draft, edit it, and send it yourself from your own
-  email client.
-- It does not decide who to contact. Agent 1 produces a report, Agent 2
-  drafts for leads YOU choose to pursue — a human is the decision-maker
-  at both handoff points.
-
-This is a deliberate architecture choice, not a missing feature:
-**Agent 1 researches → human reviews → Agent 2 drafts outreach (human
-edits and sends) → human scopes and approves any project → Agent 3
-scaffolds a starting solution (human finishes and delivers).**
+The public demo runs Agents 1 and 2 only. Nothing can be sent from it, and scraped contact emails are hidden.
 
 ## How it works
 
-**Agent 1 — Lead Qualifier:**
-1. `search_leads.py` — runs your search queries (e.g. "clinics in
-   Karachi") through the Tavily Search API, filtering out social media
-   profiles and known aggregator/directory domains
-2. `detect_chatbot.py` — fetches each business's public homepage and
-   checks for known chatbot widget fingerprints
-3. `find_contact.py` — looks for a contact email on the same page
-   (mailto: links first, then a text scan)
-4. `analyze_lead.py` — sends the page's visible text to Gemini, asking it
-   to summarize the business and rate lead quality, grounded only in
-   what the page actually says
-5. `agent1_find_leads.py` — orchestrates all of it with retries and
-   per-URL failure isolation, writes `leads_report.csv`
+```mermaid
+flowchart LR
+    A[Search query] --> B[Agent 1: Lead Qualifier]
+    B --> C[leads_report.csv]
+    C --> D{Human review}
+    D --> E[Agent 2: Outreach Drafter]
+    E --> F[outreach_drafts.csv]
+    F --> G{Human review}
+    G --> H[Agent 3: Sender<br/>y/n per email]
+```
 
-**Agent 2 — Outreach Drafter:**
-6. `agent2_draft_outreach.py` — reads `leads_report.csv`, and for leads
-   at "High" quality with a found contact email:
-   - does a best-effort search for a real contact person's name (clearly
-     labeled as a GUESS to verify, never presented as confirmed fact)
-   - drafts a personalized email with a real subject line, referencing
-     the actual business type and reasoning Agent 1 found, and naturally
-     including your portfolio/proof link
-   - writes everything to `outreach_drafts.csv`. **Never sends anything.**
+**Agent 1: Lead Qualifier** (`agent1_find_leads.py`)
+1. `search_leads.py` runs search queries through the Tavily Search API and filters out social media profiles, document hosts, and known directory domains.
+2. `detect_chatbot.py` fetches each homepage and checks for fingerprints of common chat widgets (Intercom, Drift, Tidio, Tawk.to, Crisp, Zendesk, HubSpot, LiveChat).
+3. `find_contact.py` finds a contact email (`mailto:` links first, then a text scan).
+4. `analyze_lead.py` sends the page's visible text to Gemini, which summarizes the business and rates lead quality High, Medium, or Low. The prompt is grounded only in the page text and rejects directories and aggregators.
+5. Per-URL failure isolation and retries, then writes `leads_report.csv`.
 
-**Agent 3 — Outreach Sender:**
-7. `agent3_send_outreach.py` — reads `outreach_drafts.csv` and actually
-   sends emails via `send_email.py`, but:
-   - **TEST_MODE defaults to on.** Every email is redirected to your own
-     inbox instead of the real recipient, clearly labeled, so you can see
-     exactly what a real send looks like with zero risk.
-   - **Every single email, in either mode, requires an explicit y/n
-     confirmation before sending.** There is no "send all" shortcut
-     anywhere in this codebase - even with TEST_MODE off, you read and
-     approve each email individually before it goes out.
+**Agent 2: Outreach Drafter** (`agent2_draft_outreach.py`)
+- Reads High-quality leads that have a contact email.
+- Optionally searches for a contact person's name. The name is always labeled a GUESS to verify, never treated as fact.
+- Drafts a short, personalized email with a subject line, grounded in the real business type and reasoning from Agent 1, and writes `outreach_drafts.csv`. It never sends anything.
+
+**Agent 3: Outreach Sender** (`agent3_send_outreach.py`)
+- Sends emails through Gmail SMTP, but always asks for explicit y/n confirmation before every single email. There is no "send all" path.
+- `TEST_MODE` is on by default, so every email goes to your own inbox, clearly labeled with the intended recipient.
+- Live sends are capped per calendar day, tracked in `send_log.jsonl` across runs, with a delay between sends.
+
+## Safety design
+
+- Public APIs only. No scraping of private or authenticated platforms such as LinkedIn.
+- Human gates at every handoff. A person decides who to pursue and approves every email.
+- Hallucination control. Lead analysis and drafts are grounded only in what the site actually says, and the model is told not to invent details.
+- Contact names are unverified guesses and are labeled as such in the output.
+- The public demo never imports the sending code, and enforces usage caps: 3 leads per run, 3 runs per session, 30 runs per day.
+
+## Tech stack
+
+Python, Gemini API (`google-generativeai`), Tavily Search API, BeautifulSoup, Requests, Streamlit, Gmail SMTP.
+
+## Project structure
+
+```
+agent1_find_leads.py       Agent 1 orchestrator
+agent2_draft_outreach.py   Agent 2 drafter
+agent3_send_outreach.py    Agent 3 sender (confirmation + daily cap)
+search_leads.py            Tavily search + domain filtering
+detect_chatbot.py          Chat widget detection
+find_contact.py            Contact email extraction
+analyze_lead.py            LLM lead analysis
+send_email.py              Gmail SMTP sender (TEST_MODE)
+run_all.py                 Runs all three agents in sequence
+streamlit_app.py           Public demo (Agents 1 + 2, no sending)
+```
 
 ## Setup
 
+Use Python 3.11 or 3.12. Newer Python versions currently conflict with the pinned protobuf version.
+
 ```bash
+git clone https://github.com/hasanmhk01-source/lead-finder-agent.git
+cd lead-finder-agent
+python -m venv venv
+venv\Scripts\activate        # Windows
 pip install -r requirements.txt
-cp .env.example .env
 ```
 
-**Gemini API key:** same one you've used for other projects, from
-https://aistudio.google.com/apikey
+Create a `.env` file (never commit it):
 
-**Tavily API key (free, no credit card required):**
-1. Go to https://tavily.com and sign up
-2. Your API key is shown on your dashboard
-3. Copy it into TAVILY_API_KEY in your .env
+```
+GEMINI_API_KEY=your_gemini_key
+TAVILY_API_KEY=your_tavily_key
+SENDER_EMAIL=your_gmail_address        # Agent 3 only
+SENDER_APP_PASSWORD=your_app_password  # Agent 3 only
+TEST_MODE=true
+```
 
-Free tier: 1,000 searches/month, no card needed.
-
-**Gmail App Password (for Agent 3, sending emails):**
-Gmail blocks regular passwords for this kind of programmatic sending -
-you need a separate "App Password":
-1. Go to https://myaccount.google.com/security
-2. Turn on 2-Step Verification if it isn't already on (required for App
-   Passwords to be available at all)
-3. Search for "App Passwords" in your Google Account settings (or go to
-   https://myaccount.google.com/apppasswords directly)
-4. Create a new one, name it something like "lead-finder-agent"
-5. Copy the 16-character password it gives you into
-   SENDER_APP_PASSWORD in your .env - and put your real Gmail address
-   into SENDER_EMAIL
-
-Note: this project originally targeted Google's Custom Search API, but
-Google closed that service to new signups as of late 2026. Tavily is
-used instead - free without a card, purpose-built for AI agent use.
+- **Gemini key:** https://aistudio.google.com/apikey
+- **Tavily key:** https://tavily.com (free tier, no card needed)
+- **Gmail App Password (Agent 3 only):** turn on 2-Step Verification, then create an App Password at https://myaccount.google.com/apppasswords
 
 ## Running it
 
 ```bash
-python agent1_find_leads.py
+python -m streamlit run streamlit_app.py   # web demo (Agents 1 + 2)
+python agent1_find_leads.py                # find and research leads
+python agent2_draft_outreach.py            # draft outreach emails
+python agent3_send_outreach.py             # review and send, one by one
 ```
 
-Searches automatically using `SEARCH_QUERIES` in `agent1_find_leads.py`
-(edit that list for different business categories/cities), or uses
-`leads_input.txt` instead if you've put real URLs there. Writes
-`leads_report.csv` — **read this yourself before deciding who to
-pursue.**
+Edit `SEARCH_QUERIES` in `agent1_find_leads.py` to change the business types and cities. Set `YOUR_NAME` and `YOUR_PORTFOLIO_LINK` in `agent2_draft_outreach.py` before drafting. Put URLs in `leads_input.txt` to research specific businesses instead of searching.
 
-```bash
-python agent2_draft_outreach.py
-```
+## Deploying the demo
 
-Reads `leads_report.csv`, drafts outreach for "High" quality leads with
-a found email (edit `MIN_LEAD_QUALITY` in the file to include "Medium"
-too). Set `YOUR_PORTFOLIO_LINK` at the top of the file to your real
-Fiverr gig or demo link before running. Writes `outreach_drafts.csv`.
+1. Push to GitHub. `.env`, CSV files, and logs are excluded by `.gitignore`.
+2. On share.streamlit.io, create an app from the repo with main file `streamlit_app.py`.
+3. In Advanced settings, set **Python 3.11** and add `GEMINI_API_KEY` and `TAVILY_API_KEY` under Secrets.
 
-**Check the `contact_name_status` column for every row before sending.**
-If it says `GUESS (verify before sending): <name>`, that name came from a
-web search, not the business's own page — confirm it's actually correct
-(and still current) before using it. If it says "not found," the draft
-uses a generic "Hi there," greeting instead — don't invent a name
-yourself without checking either. **Read and edit every draft yourself
-before sending anything — nothing is sent automatically, ever.**
+## Known limitations
 
-```bash
-python agent3_send_outreach.py
-```
+- The chatbot fingerprint list covers only about 8 providers.
+- Only the homepage is checked, so a contact email on a `/contact` page is missed.
+- Some sites block automated requests (403), and JavaScript-rendered pages are invisible to the fetcher.
+- Lead-quality ratings vary slightly between runs. Treat them as a triage signal, not a precise score.
+- Contact names found by Agent 2 are unverified and must be checked by a human.
+- The Gemini free tier allows about 5 requests per minute, so a demo run takes 1-2 minutes.
 
-Walks through every draft one at a time, shows you the full email, and
-asks `y/n/q` before sending each one. With `TEST_MODE=true` (the
-default), every send actually lands in your own inbox, clearly labeled
-with the real intended recipient — run it this way first, every time, to
-see exactly what would go out before ever setting `TEST_MODE=false`.
+## Roadmap
 
-When you're ready for real sends: set `TEST_MODE=false` in `.env`, but
-know that the per-email confirmation prompt is still there — it never
-goes away, in any mode, by design.
+- Skip recipients who were already contacted (dedupe against `send_log.jsonl`).
+- Check `/contact` and `/about` pages for emails.
+- Migrate from `google-generativeai` to the newer `google-genai` SDK.
+- Embeddable chatbot widget as the follow-up deliverable for won clients.
+- Evaluation set to measure lead-quality consistency across runs.
 
-## Tradeoffs / what I'd improve next
+## Author
 
-- **Chatbot fingerprint list is not exhaustive** — only checks ~8 common
-  providers.
-- **Single-page check only** — only looks at the homepage, for both
-  chatbot detection and contact email finding. A business's real contact
-  email might live on a separate /contact page this tool never visits.
-- **Some sites block automated requests entirely** (403 errors) — large
-  corporate sites with bot-protection will often fail to fetch even
-  though the site is completely live. Confirmed during testing (Foodpanda,
-  McDonald's Pakistan, TripAdvisor all blocked this way).
-- **Regional DNS reliability varies** — some country-code domains (e.g.
-  .pk) did not resolve reliably from every network tested, even though
-  confirmed live from elsewhere.
-- **JavaScript-rendered content is invisible to this tool** — the agent
-  correctly reports "not enough information" rather than guessing when a
-  page's real content loads dynamically - confirmed during testing.
-- **Search result relevance is only as good as the query** — the domain
-  filter catches obvious noise (social media, directories) but can't
-  distinguish a genuinely small business from a large, well-funded
-  platform that happens to match the search terms (e.g. Foodpanda showing
-  up in a "restaurants in Karachi" search). That judgment still needs a
-  human reading the report.
-- **LLM lead-quality judgments have some run-to-run variance** — the same
-  URL was rated "Medium" in one run and "Low" in another during testing.
-  Useful as a triage signal, not a precise score.
-- **Agent 2's drafts are a starting point, not a final send** — always
-  read every draft for tone, accuracy, and anything that needs
-  personalizing further before sending.
-- **Contact names found by Agent 2 are unverified guesses, not facts** —
-  they come from a broader web search, not the business's own page, and
-  could be outdated or belong to someone who has left. This is the one
-  piece of this system with a real, non-trivial chance of being wrong -
-  treat every guessed name as something to double-check, never as
-  confirmed.
-
-## What's next (not built yet, on purpose)
-
-Agent 3 (scaffolding a starting solution for a signed client) comes after
-Agent 1 and 2 are tested and trusted in real use — with its own
-human-approval gate before any code reaches a real client.
+Hasan Khan - https://github.com/hasanmhk01-source
